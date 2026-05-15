@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-
+import { signOut } from "firebase/auth";
+import { useRouter } from "next/navigation";
+import { db, auth } from "@/lib/firebase";
 
 interface Responsable {
   id?: string;
@@ -16,6 +17,8 @@ interface Responsable {
 }
 
 export default function Dashboard() {
+  const router = useRouter();
+
   const [totalIglesias, setTotalIglesias] = useState(0);
   const [totalMinisterios, setTotalMinisterios] = useState(0);
   const [totalResponsables, setTotalResponsables] = useState(0);
@@ -28,6 +31,11 @@ export default function Dashboard() {
   const [cumpleañosMes, setCumpleañosMes] = useState<Responsable[]>([]);
   const [padres, setPadres] = useState<Responsable[]>([]);
   const [madres, setMadres] = useState<Responsable[]>([]);
+
+  const cerrarSesion = async () => {
+    await signOut(auth);
+    router.push("/login");
+  };
 
   const crearLinkWhatsApp = (telefono: string, mensaje: string) => {
     const numeroLimpio = telefono.replace(/\D/g, "");
@@ -53,41 +61,23 @@ export default function Dashboard() {
 
       responsablesSnapshot.forEach((docu) => {
         const data = docu.data() as Responsable;
+        const tipoPadre = data.tipoPadre?.toLowerCase().trim();
 
-        if (data.tipoPadre === "padre") {
-          listaPadres.push({
-            id: docu.id,
-            ...data,
-          });
-        }
+        const responsable: Responsable = {
+          id: docu.id,
+          ...data,
+        };
 
-        if (data.tipoPadre === "madre") {
-          listaMadres.push({
-            id: docu.id,
-            ...data,
-          });
-        }
-
-        if (data.tipoPadre === "no aplica") {
-          noAplica++;
-        }
+        if (tipoPadre === "padre") listaPadres.push(responsable);
+        if (tipoPadre === "madre") listaMadres.push(responsable);
+        if (tipoPadre === "no aplica") noAplica++;
 
         if (data.cumpleaños) {
           const [, mes, dia] = data.cumpleaños.split("-").map(Number);
 
-          if (mes === mesActual) {
-            listaCumpleañosMes.push({
-              id: docu.id,
-              ...data,
-            });
-          }
-
-          if (mes === mesActual && dia === diaActual) {
-            listaCumpleañosHoy.push({
-              id: docu.id,
-              ...data,
-            });
-          }
+          if (mes === mesActual) listaCumpleañosMes.push(responsable);
+          if (mes === mesActual && dia === diaActual)
+            listaCumpleañosHoy.push(responsable);
         }
       });
 
@@ -114,14 +104,23 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8">
-        <h1 className="text-3xl md:text-4xl font-bold text-[#44D7A8] mb-4">
-          CNB Conecta+
-        </h1>
+      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl md:text-4xl font-bold text-[#44D7A8] mb-4">
+            CNB Conecta+
+          </h1>
 
-        <p className="text-gray-600">
-          Plataforma Oficial del Distrito Misionero Ciudad Nueva B
-        </p>
+          <p className="text-gray-600">
+            Plataforma Oficial del Distrito Misionero Ciudad Nueva B
+          </p>
+        </div>
+
+        <button
+          onClick={cerrarSesion}
+          className="px-5 py-3 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 transition"
+        >
+          Cerrar sesión
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">

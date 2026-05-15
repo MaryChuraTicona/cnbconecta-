@@ -1,29 +1,28 @@
-import type { Metadata } from "next";
+"use client";
+
 import "./globals.css";
-
+import { usePathname } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
-
-export const metadata: Metadata = {
-  title: "CNB Conecta+",
-  description:
-    "Plataforma Oficial del Distrito Misionero Ciudad Nueva B",
-};
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
+  const pathname = usePathname();
+  const esLogin = pathname === "/login";
+
   return (
     <html lang="es">
-      <body>
-        <main className="min-h-screen bg-gray-100 flex">
-          <Sidebar />
-
-          <section className="flex-1 p-4 pt-20 md:p-6">
-            {children}
-          </section>
-        </main>
+      <body className="bg-gray-100">
+        {esLogin ? (
+          <>{children}</>
+        ) : (
+          <div className="flex min-h-screen">
+            <Sidebar />
+            <main className="flex-1 p-6 md:ml-0">{children}</main>
+          </div>
+        )}
       </body>
     </html>
   );
