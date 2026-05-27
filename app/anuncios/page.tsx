@@ -1,9 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { addDoc, collection, getDocs } from "firebase/firestore";
-import { Copy, Download, Users } from "lucide-react";
-import { db } from "@/lib/firebase";
+import ProtegerRuta from "@/components/ProtegerRuta";
+import { auth, db } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { addDoc, collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { ImagePlus, Megaphone, Plus, Send } from "lucide-react";
+
+interface Usuario {
+  uid?: string;
+  nombre?: string;
+  rol?: string;
+  iglesiaId?: string | null;
+  iglesiaNombre?: string;
+}
 
 interface Iglesia {
   id: string;
@@ -15,29 +25,14 @@ interface Ministerio {
   nombre: string;
 }
 
-interface Anuncio {
-  id?: string;
-  titulo: string;
-  resumen: string;
-  contenido: string;
-  lugar: string;
-  fecha: string;
-  hora: string;
-  prioridad: string;
-  destinatarioTipo: string;
-  ministerios: string[];
-  iglesias: string[];
-  estado: string;
-  imagenUrl: string;
-}
-
 export default function AnunciosPage() {
-  const [anuncios, setAnuncios] = useState<Anuncio[]>([]);
+  const [usuario, setUsuario] = useState<Usuario | null>(null);
   const [iglesias, setIglesias] = useState<Iglesia[]>([]);
   const [ministerios, setMinisterios] = useState<Ministerio[]>([]);
-  const [subiendoImagen, setSubiendoImagen] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
+  const [guardando, setGuardando] = useState(false);
 
-  const formularioInicial: Anuncio = {
+  const [formulario, setFormulario] = useState({
     titulo: "",
     resumen: "",
     contenido: "",
@@ -46,48 +41,68 @@ export default function AnunciosPage() {
     hora: "",
     prioridad: "normal",
     destinatarioTipo: "todos",
-    ministerios: [],
-    iglesias: [],
-    estado: "pendiente",
+    iglesiaId: "",
+    iglesiaNombre: "",
+    ministerioId: "",
+    ministerioNombre: "",
     imagenUrl: "",
-  };
+  });
 
-  const [formulario, setFormulario] = useState<Anuncio>(formularioInicial);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) return;
 
-  const obtenerDatos = async () => {
-    try {
-      const anunciosSnapshot = await getDocs(collection(db, "announcements"));
-      const iglesiasSnapshot = await getDocs(collection(db, "churches"));
-      const ministeriosSnapshot = await getDocs(collection(db, "ministries"));
+      const ref = doc(db, "usuarios", user.uid);
+      const snap = await getDoc(ref);
 
-      setAnuncios(
-        anunciosSnapshot.docs.map((docu) => ({
-          id: docu.id,
-          ...(docu.data() as Anuncio),
-        }))
-      );
+      if (snap.exists()) {
+        const data = snap.data() as Usuario;
+
+        setUsuario({
+          uid: user.uid,
+          ...data,
+        });
+
+        if (data.rol === "comunicador_iglesia") {
+          setFormulario((prev) => ({
+            ...prev,
+            destinatarioTipo: "iglesia",
+            iglesiaId: data.iglesiaId || "",
+            iglesiaNombre: data.iglesiaNombre || "",
+          }));
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    async function cargarDatos() {
+      const iglesiasSnap = await getDocs(collection(db, "churches"));
+      const ministeriosSnap = await getDocs(collection(db, "ministries"));
 
       setIglesias(
-        iglesiasSnapshot.docs.map((docu) => ({
+        iglesiasSnap.docs.map((docu) => ({
           id: docu.id,
           nombre: docu.data().nombre,
         }))
       );
 
       setMinisterios(
-        ministeriosSnapshot.docs.map((docu) => ({
+        ministeriosSnap.docs.map((docu) => ({
           id: docu.id,
           nombre: docu.data().nombre,
         }))
       );
-    } catch (error) {
-      console.error(error);
     }
-  };
 
-  const subirImagen = async (archivo: File) => {
+    cargarDatos();
+  }, []);
+
+  async function subirImagen(archivo: File) {
     try {
-      setSubiendoImagen(true);
+      setSubiendo(true);
 
       const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
@@ -115,451 +130,329 @@ export default function AnunciosPage() {
         ...prev,
         imagenUrl: resultado.secure_url,
       }));
-
-      alert("Imagen subida correctamente");
     } catch (error) {
       console.error(error);
       alert("Error al subir imagen");
     } finally {
-      setSubiendoImagen(false);
+      setSubiendo(false);
     }
-  };
+  }
 
-  const guardarAnuncio = async () => {
+  async function guardarAnuncio() {
     if (!formulario.titulo.trim()) {
-      alert("El título es obligatorio");
+      alert("Escribe el título del anuncio");
       return;
     }
 
     if (!formulario.contenido.trim()) {
-      alert("El mensaje es obligatorio");
+      alert("Escribe el contenido del anuncio");
       return;
     }
 
     if (!formulario.imagenUrl) {
-      alert("Debes subir una imagen");
-      return;
-    }
-
-    if (
-      formulario.destinatarioTipo === "ministerios" &&
-      formulario.ministerios.length === 0
-    ) {
-      alert("Selecciona al menos un ministerio");
-      return;
-    }
-
-    if (
-      formulario.destinatarioTipo === "iglesias" &&
-      formulario.iglesias.length === 0
-    ) {
-      alert("Selecciona al menos una iglesia");
+      alert("Sube una imagen para el anuncio");
       return;
     }
 
     try {
+      setGuardando(true);
+
       await addDoc(collection(db, "announcements"), {
         ...formulario,
         estado: "pendiente",
+        creadoPorUid: usuario?.uid || null,
+        creadoPorNombre: usuario?.nombre || "Usuario",
+        creadoPorRol: usuario?.rol || "usuario",
+        iglesiaCreadorId: usuario?.iglesiaId || null,
+        iglesiaCreadorNombre: usuario?.iglesiaNombre || "Distrito CNB",
         creadoEn: new Date(),
+        aprobadoPor: null,
+        aprobadoEn: null,
+        rechazadoPor: null,
+        rechazadoEn: null,
       });
 
-      alert("Anuncio guardado");
-      setFormulario(formularioInicial);
-      obtenerDatos();
+      alert("Anuncio enviado para aprobación");
+
+      setFormulario({
+        titulo: "",
+        resumen: "",
+        contenido: "",
+        lugar: "",
+        fecha: "",
+        hora: "",
+        prioridad: "normal",
+        destinatarioTipo:
+          usuario?.rol === "comunicador_iglesia" ? "iglesia" : "todos",
+        iglesiaId: usuario?.rol === "comunicador_iglesia" ? usuario?.iglesiaId || "" : "",
+        iglesiaNombre:
+          usuario?.rol === "comunicador_iglesia" ? usuario?.iglesiaNombre || "" : "",
+        ministerioId: "",
+        ministerioNombre: "",
+        imagenUrl: "",
+      });
     } catch (error) {
       console.error(error);
       alert("Error al guardar anuncio");
+    } finally {
+      setGuardando(false);
     }
-  };
-
-  const crearMensajeLimpio = (anuncio: Anuncio) => {
-    return `${anuncio.contenido}
-
-${anuncio.lugar ? `Lugar: ${anuncio.lugar}` : ""}
-${anuncio.fecha ? `Fecha: ${anuncio.fecha}` : ""}
-${anuncio.hora ? `Hora: ${anuncio.hora}` : ""}`.trim();
-  };
-
-  const copiarMensaje = async (anuncio: Anuncio) => {
-    try {
-      await navigator.clipboard.writeText(crearMensajeLimpio(anuncio));
-      alert("Mensaje copiado");
-    } catch (error) {
-      console.error(error);
-      alert("No se pudo copiar el mensaje");
-    }
-  };
-
-  useEffect(() => {
-    obtenerDatos();
-  }, []);
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8">
-        <h1 className="text-3xl font-bold text-[#44D7A8] mb-2">
-          Gestión de Anuncios
-        </h1>
-
-        <p className="text-sm text-gray-500 mb-8">
-          Crea anuncios con imagen, datos del evento y segmentación por iglesia
-          o ministerio.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <input
-            type="text"
-            placeholder="Título del anuncio *"
-            value={formulario.titulo}
-            onChange={(e) =>
-              setFormulario({ ...formulario, titulo: e.target.value })
-            }
-            className="border rounded-lg p-3"
-          />
-
-          <input
-            type="text"
-            placeholder="Resumen"
-            value={formulario.resumen}
-            onChange={(e) =>
-              setFormulario({ ...formulario, resumen: e.target.value })
-            }
-            className="border rounded-lg p-3"
-          />
-
-          <input
-            type="text"
-            placeholder="Lugar"
-            value={formulario.lugar}
-            onChange={(e) =>
-              setFormulario({ ...formulario, lugar: e.target.value })
-            }
-            className="border rounded-lg p-3"
-          />
-
-          <input
-            type="date"
-            value={formulario.fecha}
-            onChange={(e) =>
-              setFormulario({ ...formulario, fecha: e.target.value })
-            }
-            className="border rounded-lg p-3"
-          />
-
-          <input
-            type="time"
-            value={formulario.hora}
-            onChange={(e) =>
-              setFormulario({ ...formulario, hora: e.target.value })
-            }
-            className="border rounded-lg p-3"
-          />
-
-          <select
-            value={formulario.prioridad}
-            onChange={(e) =>
-              setFormulario({ ...formulario, prioridad: e.target.value })
-            }
-            className="border rounded-lg p-3"
-          >
-            <option value="normal">Prioridad normal</option>
-            <option value="alta">Prioridad alta</option>
-            <option value="urgente">Urgente</option>
-          </select>
-
-          <select
-            value={formulario.destinatarioTipo}
-            onChange={(e) =>
-              setFormulario({
-                ...formulario,
-                destinatarioTipo: e.target.value,
-                ministerios: [],
-                iglesias: [],
-              })
-            }
-            className="border rounded-lg p-3"
-          >
-            <option value="todos">Enviar a todos</option>
-            <option value="ministerios">Ministerios específicos</option>
-            <option value="iglesias">Iglesias específicas</option>
-          </select>
-
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e) => {
-              const archivo = e.target.files?.[0];
-              if (archivo) subirImagen(archivo);
-            }}
-            className="border rounded-lg p-3"
-          />
-
-          {formulario.destinatarioTipo === "ministerios" && (
-            <div className="md:col-span-2 border rounded-xl p-4">
-              <p className="font-semibold text-gray-700 mb-3">
-                Selecciona ministerios
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {ministerios.map((ministerio) => (
-                  <label
-                    key={ministerio.id}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={formulario.ministerios.includes(
-                        ministerio.nombre
-                      )}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setFormulario({
-                            ...formulario,
-                            ministerios: [
-                              ...formulario.ministerios,
-                              ministerio.nombre,
-                            ],
-                          });
-                        } else {
-                          setFormulario({
-                            ...formulario,
-                            ministerios: formulario.ministerios.filter(
-                              (m) => m !== ministerio.nombre
-                            ),
-                          });
-                        }
-                      }}
-                    />
-                    {ministerio.nombre}
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {formulario.destinatarioTipo === "iglesias" && (
-            <div className="md:col-span-2 border rounded-xl p-4">
-              <p className="font-semibold text-gray-700 mb-3">
-                Selecciona iglesias
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {iglesias.map((iglesia) => (
-                  <label
-                    key={iglesia.id}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={formulario.iglesias.includes(iglesia.nombre)}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setFormulario({
-                            ...formulario,
-                            iglesias: [...formulario.iglesias, iglesia.nombre],
-                          });
-                        } else {
-                          setFormulario({
-                            ...formulario,
-                            iglesias: formulario.iglesias.filter(
-                              (i) => i !== iglesia.nombre
-                            ),
-                          });
-                        }
-                      }}
-                    />
-                    {iglesia.nombre}
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {subiendoImagen && (
-          <p className="text-sm text-gray-500 mb-4">Subiendo imagen...</p>
-        )}
-
-        {formulario.imagenUrl && (
-          <img
-            src={formulario.imagenUrl}
-            alt="Vista previa"
-            className="w-full max-w-md rounded-2xl border mb-6"
-          />
-        )}
-
-        <textarea
-          placeholder="Mensaje completo para WhatsApp *"
-          value={formulario.contenido}
-          onChange={(e) =>
-            setFormulario({ ...formulario, contenido: e.target.value })
-          }
-          className="border rounded-lg p-3 w-full min-h-[180px] mb-6"
-        />
-
-        <button
-          onClick={guardarAnuncio}
-          className="bg-[#44D7A8] text-white px-6 py-3 rounded-lg hover:bg-[#36b98f] transition"
-        >
-          Guardar anuncio
-        </button>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-800">
-              Anuncios registrados
-            </h2>
-            <p className="text-sm text-gray-500">
-              Copia el mensaje y descarga la imagen para enviarla por WhatsApp.
-            </p>
-          </div>
-
-          <span className="text-sm bg-[#44D7A8]/10 text-[#2FAF86] px-4 py-2 rounded-full font-medium">
-            {anuncios.length} registrados
+    <ProtegerRuta permiso="anuncios">
+      <div className="space-y-8">
+        <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <span className="text-sm font-semibold text-[#2FAF86]">
+            Área de Comunicaciones
           </span>
-        </div>
 
-        {anuncios.length === 0 ? (
-          <div className="border border-dashed rounded-2xl p-6 text-center text-gray-500">
-            Todavía no hay anuncios.
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-900 md:text-4xl">
+            Crear Anuncio
+          </h1>
+
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500 md:text-base">
+            Crea comunicados oficiales para revisión. El pastor distrital o el
+            administrador podrán aprobarlos antes de su publicación.
+          </p>
+        </section>
+
+        <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="rounded-2xl bg-[#44D7A8]/10 p-3 text-[#2FAF86]">
+              <Megaphone size={22} />
+            </div>
+
+            <div>
+              <h2 className="text-2xl font-black text-slate-900">
+                Nuevo anuncio
+              </h2>
+              <p className="text-sm text-slate-500">
+                Será enviado como pendiente de aprobación
+              </p>
+            </div>
           </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {anuncios.map((anuncio) => (
-              <div
-                key={anuncio.id}
-                className="border rounded-2xl p-5 bg-white hover:shadow-md transition"
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Input
+              label="Título"
+              value={formulario.titulo}
+              onChange={(v: string) =>
+                setFormulario({ ...formulario, titulo: v })
+              }
+            />
+
+            <Input
+              label="Resumen"
+              value={formulario.resumen}
+              onChange={(v: string) =>
+                setFormulario({ ...formulario, resumen: v })
+              }
+            />
+
+            <Input
+              label="Lugar"
+              value={formulario.lugar}
+              onChange={(v: string) =>
+                setFormulario({ ...formulario, lugar: v })
+              }
+            />
+
+            <Input
+              label="Fecha"
+              type="date"
+              value={formulario.fecha}
+              onChange={(v: string) =>
+                setFormulario({ ...formulario, fecha: v })
+              }
+            />
+
+            <Input
+              label="Hora"
+              type="time"
+              value={formulario.hora}
+              onChange={(v: string) =>
+                setFormulario({ ...formulario, hora: v })
+              }
+            />
+
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-700">
+                Prioridad
+              </label>
+              <select
+                value={formulario.prioridad}
+                onChange={(e) =>
+                  setFormulario({ ...formulario, prioridad: e.target.value })
+                }
+                className="h-14 w-full rounded-2xl border border-slate-200 px-4 text-sm outline-none focus:border-[#44D7A8]"
               >
-                {anuncio.imagenUrl && (
-                  <img
-                    src={anuncio.imagenUrl}
-                    alt={anuncio.titulo}
-                    className="w-full rounded-2xl border mb-4"
-                  />
-                )}
-
-                <div className="flex items-start justify-between gap-4 mb-4">
-                  <div>
-                    <h3 className="font-bold text-lg text-gray-800">
-                      {anuncio.titulo}
-                    </h3>
-                    <p className="text-sm text-gray-500">{anuncio.resumen}</p>
-                  </div>
-
-                  <span className="text-xs px-3 py-1 rounded-full bg-yellow-100 text-yellow-700 font-medium capitalize">
-                    {anuncio.prioridad}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-4">
-                  <div>
-                    <p className="text-gray-400">Lugar</p>
-                    <p className="font-medium text-gray-700">
-                      {anuncio.lugar || "No definido"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-gray-400">Fecha</p>
-                    <p className="font-medium text-gray-700">
-                      {anuncio.fecha || "No definida"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-gray-400">Hora</p>
-                    <p className="font-medium text-gray-700">
-                      {anuncio.hora || "No definida"}
-                    </p>
-                  </div>
-
-                  <div>
-                    <p className="text-gray-400">Destinatario</p>
-                    <p className="font-medium text-gray-700 capitalize">
-                      {anuncio.destinatarioTipo}
-                    </p>
-                  </div>
-                </div>
-
-                {anuncio.destinatarioTipo === "ministerios" && (
-                  <div className="mb-4">
-                    <p className="text-gray-400 text-sm mb-2">
-                      Ministerios seleccionados
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {anuncio.ministerios?.map((ministerio) => (
-                        <span
-                          key={ministerio}
-                          className="text-xs bg-gray-100 text-gray-700 px-3 py-1 rounded-full"
-                        >
-                          {ministerio}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {anuncio.destinatarioTipo === "iglesias" && (
-                  <div className="mb-4">
-                    <p className="text-gray-400 text-sm mb-2">
-                      Iglesias seleccionadas
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {anuncio.iglesias?.map((iglesia) => (
-                        <span
-                          key={iglesia}
-                          className="text-xs bg-gray-100 text-gray-700 px-3 py-1 rounded-full"
-                        >
-                          {iglesia}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="border-t pt-4">
-                  <p className="text-sm text-gray-700 whitespace-pre-line">
-                    {anuncio.contenido}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-3 mt-5">
-                  <button
-                    onClick={() => copiarMensaje(anuncio)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#44D7A8] text-white text-sm hover:bg-[#36b98f] transition"
-                  >
-                    <Copy size={16} />
-                    Copiar mensaje
-                  </button>
-
-                  <a
-                    href={anuncio.imagenUrl}
-                    download
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg border text-sm hover:bg-gray-100 transition"
-                  >
-                    <Download size={16} />
-                    Descargar imagen
-                  </a>
-
-                  <button className="flex items-center gap-2 px-4 py-2 rounded-lg border text-sm hover:bg-gray-100 transition">
-                    <Users size={16} />
-                    {anuncio.destinatarioTipo === "todos"
-                      ? "Todos"
-                      : anuncio.destinatarioTipo === "ministerios"
-                      ? `${anuncio.ministerios?.length || 0} ministerios`
-                      : `${anuncio.iglesias?.length || 0} iglesias`}
-                  </button>
-                </div>
-              </div>
-            ))}
+                <option value="normal">Normal</option>
+                <option value="alta">Alta</option>
+                <option value="urgente">Urgente</option>
+              </select>
+            </div>
           </div>
-        )}
+
+          <div className="mt-4">
+            <label className="mb-2 block text-sm font-bold text-slate-700">
+              Mensaje del anuncio
+            </label>
+            <textarea
+              value={formulario.contenido}
+              onChange={(e) =>
+                setFormulario({ ...formulario, contenido: e.target.value })
+              }
+              rows={6}
+              className="w-full rounded-2xl border border-slate-200 p-4 text-sm outline-none focus:border-[#44D7A8]"
+              placeholder="Escribe aquí el mensaje oficial..."
+            />
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-700">
+                Destinatario
+              </label>
+
+              <select
+                value={formulario.destinatarioTipo}
+                disabled={usuario?.rol === "comunicador_iglesia"}
+                onChange={(e) =>
+                  setFormulario({
+                    ...formulario,
+                    destinatarioTipo: e.target.value,
+                    iglesiaId: "",
+                    iglesiaNombre: "",
+                    ministerioId: "",
+                    ministerioNombre: "",
+                  })
+                }
+                className="h-14 w-full rounded-2xl border border-slate-200 px-4 text-sm outline-none focus:border-[#44D7A8] disabled:bg-slate-100"
+              >
+                <option value="todos">Todo el distrito</option>
+                <option value="iglesia">Una iglesia</option>
+                <option value="ministerio">Un ministerio</option>
+              </select>
+            </div>
+
+            {formulario.destinatarioTipo === "iglesia" && (
+              <div>
+                <label className="mb-2 block text-sm font-bold text-slate-700">
+                  Iglesia
+                </label>
+
+                <select
+                  value={formulario.iglesiaId}
+                  disabled={usuario?.rol === "comunicador_iglesia"}
+                  onChange={(e) => {
+                    const iglesia = iglesias.find((i) => i.id === e.target.value);
+
+                    setFormulario({
+                      ...formulario,
+                      iglesiaId: e.target.value,
+                      iglesiaNombre: iglesia?.nombre || "",
+                    });
+                  }}
+                  className="h-14 w-full rounded-2xl border border-slate-200 px-4 text-sm outline-none focus:border-[#44D7A8] disabled:bg-slate-100"
+                >
+                  <option value="">Seleccionar iglesia</option>
+                  {iglesias.map((iglesia) => (
+                    <option key={iglesia.id} value={iglesia.id}>
+                      {iglesia.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {formulario.destinatarioTipo === "ministerio" && (
+              <div>
+                <label className="mb-2 block text-sm font-bold text-slate-700">
+                  Ministerio
+                </label>
+
+                <select
+                  value={formulario.ministerioId}
+                  onChange={(e) => {
+                    const ministerio = ministerios.find(
+                      (m) => m.id === e.target.value
+                    );
+
+                    setFormulario({
+                      ...formulario,
+                      ministerioId: e.target.value,
+                      ministerioNombre: ministerio?.nombre || "",
+                    });
+                  }}
+                  className="h-14 w-full rounded-2xl border border-slate-200 px-4 text-sm outline-none focus:border-[#44D7A8]"
+                >
+                  <option value="">Seleccionar ministerio</option>
+                  {ministerios.map((ministerio) => (
+                    <option key={ministerio.id} value={ministerio.id}>
+                      {ministerio.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6">
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-3 text-center">
+              <ImagePlus className="text-[#2FAF86]" size={32} />
+
+              <span className="text-sm font-bold text-slate-700">
+                {subiendo ? "Subiendo imagen..." : "Subir imagen del anuncio"}
+              </span>
+
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const archivo = e.target.files?.[0];
+                  if (archivo) subirImagen(archivo);
+                }}
+              />
+            </label>
+
+            {formulario.imagenUrl && (
+              <img
+                src={formulario.imagenUrl}
+                alt="Imagen del anuncio"
+                className="mt-5 max-h-72 w-full rounded-2xl object-cover"
+              />
+            )}
+          </div>
+
+          <button
+            onClick={guardarAnuncio}
+            disabled={guardando || subiendo}
+            className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#111827] px-6 py-4 text-sm font-bold text-white transition hover:bg-black disabled:opacity-50"
+          >
+            <Send size={18} />
+            {guardando ? "Enviando..." : "Enviar para aprobación"}
+          </button>
+        </section>
       </div>
+    </ProtegerRuta>
+  );
+}
+
+function Input({ label, value, onChange, type = "text" }: any) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-bold text-slate-700">
+        {label}
+      </label>
+
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-14 w-full rounded-2xl border border-slate-200 px-4 text-sm outline-none focus:border-[#44D7A8]"
+      />
     </div>
   );
 }
